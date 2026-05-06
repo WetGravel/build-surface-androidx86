@@ -9,11 +9,9 @@ on:
       android_x86_branch:
         description: 'Android-x86 分支'
         required: true
-        default: 'android-9.0-r2'
+        default: 'pie-x86'
         type: choice
         options:
-          - android-9.0-r2
-          - android-9.0-r1
           - pie-x86
       surface_linux_branch:
         description: 'Linux-Surface 分支'
@@ -62,7 +60,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ANDROID_X86_BRANCH:   ${{ github.event.inputs.android_x86_branch  || 'android-9.0-r2' }}
+  ANDROID_X86_BRANCH:   ${{ github.event.inputs.android_x86_branch  || 'pie-x86' }}
   SURFACE_LINUX_BRANCH: ${{ github.event.inputs.surface_linux_branch || 'master' }}
   KERNEL_VERSION:       ${{ github.event.inputs.kernel_version       || '4.19' }}
   ENABLE_IPTSD:         ${{ github.event.inputs.enable_iptsd         || 'true' }}
@@ -168,7 +166,7 @@ jobs:
             ccache build-essential
 
           # ── 处理 Ubuntu 24.04 中已移除的旧库 ──
-          # 1. ncurses 开发包（提供 ncurses6.pc、头文件等）
+          # 1. ncurses 开发包（提供头文件等）
           sudo apt-get install -y libncurses-dev
 
           # 2. 手动安装 libncurses5 / libncursesw5 运行时库（来自 20.04 官方存档）
@@ -180,7 +178,7 @@ jobs:
           sudo dpkg -i /tmp/tinfo5.deb /tmp/ncurses5.deb /tmp/ncursesw5.deb
           sudo apt-mark hold libtinfo5 libncurses5 libncursesw5
 
-          # 3. 其他可能缺失的旧包（lib32readline-dev → 尝试现代版本）
+          # 3. 其他可能缺失的旧包
           sudo apt-get install -y lib32readline8-dev || \
             echo "lib32readline8-dev 不可用，忽略（不影响编译）"
 
