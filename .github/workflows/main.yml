@@ -12,8 +12,6 @@ on:
         type: choice
         options:
           - pie-x86
-          - r-x86
-          - q-x86
       surface_linux_branch:
         description: 'Linux-Surface 分支'
         required: true
@@ -53,8 +51,9 @@ on:
           - userdebug
           - user
           - eng
-  schedule:
-    - cron: '0 0 * * 0'
+
+schedule:
+  - cron: '0 0 * * 0'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -74,7 +73,7 @@ env:
   JOBS: 8
 
 jobs:
-  # ============================================================================
+# ============================================================================
   preflight:
     name: "预检 & 环境验证"
     runs-on: ubuntu-latest
@@ -111,12 +110,12 @@ jobs:
         run: |
           echo "Android-x86 分支 : ${{ env.ANDROID_X86_BRANCH }}"
           echo "Linux-Surface 分支: ${{ env.SURFACE_LINUX_BRANCH }}"
-          echo "内核版本 : ${{ env.KERNEL_VERSION }}"
-          echo "IPTSD : ${{ env.ENABLE_IPTSD }}"
-          echo "相机 : ${{ env.ENABLE_CAMERA }}"
-          echo "编译类型 : ${{ env.BUILD_TYPE }}"
+          echo "内核版本        : ${{ env.KERNEL_VERSION }}"
+          echo "IPTSD           : ${{ env.ENABLE_IPTSD }}"
+          echo "相机            : ${{ env.ENABLE_CAMERA }}"
+          echo "编译类型        : ${{ env.BUILD_TYPE }}"
 
-  # ============================================================================
+# ============================================================================
   build:
     name: "编译 Android-x86 + Surface 驱动"
     runs-on: ubuntu-latest
@@ -142,7 +141,6 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
-          # 现代系统包
           sudo apt-get install -y --no-install-recommends \
             git git-core curl wget \
             python3 python3-pip \
@@ -160,10 +158,8 @@ jobs:
             dosfstools syslinux syslinux-common \
             mtools parted genisoimage isolinux \
             ccache build-essential
-          # ── Ubuntu 24.04 中已移除的旧库 ──
-          # 1. ncurses 开发包
+
           sudo apt-get install -y libncurses-dev
-          # 2. 手动安装 libncurses5 / libncursesw5 运行时（来自 20.04 存档）
           echo ">>> 安装 libncurses5 / libncursesw5 兼容库"
           ARCHIVE_BASE="http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses"
           wget -q "${ARCHIVE_BASE}/libtinfo5_6.2-0ubuntu2_amd64.deb" -O /tmp/tinfo5.deb
@@ -171,10 +167,9 @@ jobs:
           wget -q "${ARCHIVE_BASE}/libncursesw5_6.2-0ubuntu2_amd64.deb" -O /tmp/ncursesw5.deb
           sudo dpkg -i /tmp/tinfo5.deb /tmp/ncurses5.deb /tmp/ncursesw5.deb
           sudo apt-mark hold libtinfo5 libncurses5 libncursesw5
-          # 3. 其他可能缺失的旧包
+
           sudo apt-get install -y lib32readline8-dev || \
             echo "lib32readline8-dev 不可用，忽略（不影响编译）"
-          # 4. python 软链接
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
           echo "所有依赖安装完成"
 
@@ -191,9 +186,6 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global color.ui false
           git config --global http.postBuffer 1073741824
-          # 新增GitLab域名适配，避免证书/访问报错
-          git config --global http.sslVerify "false"
-          git config --global https.sslVerify "false"
 
       - name: 恢复 ccache 缓存
         uses: actions/cache@v4
@@ -215,14 +207,13 @@ jobs:
           echo "USE_CCACHE=1" >> "$GITHUB_ENV"
           echo "CCACHE_EXEC=$(which ccache)" >> "$GITHUB_ENV"
 
-      # ==================== 核心修复：替换为官方GitLab manifest地址 ====================
       - name: 初始化 repo manifest
         run: |
           mkdir -p "${{ env.ANDROID_SRC_DIR }}"
           cd "${{ env.ANDROID_SRC_DIR }}"
           repo init \
             --depth=1 \
-            -u https://gitlab.com/android-x86/manifest.git \
+            -u https://git.code.sf.net/p/android-x86/manifest \
             -b "${{ env.ANDROID_X86_BRANCH }}" \
             --no-clone-bundle \
             --no-tags
@@ -295,7 +286,7 @@ jobs:
           APPLIED=0; SKIPPED=0; FAILED=0
           for PATCH in $(ls "${PATCH_DIR}"/*.patch 2>/dev/null | sort); do
             NAME=$(basename "${PATCH}")
-            printf "  应用 %s ... " "${NAME}"
+            printf " 应用 %s ... " "${NAME}"
             if git -C "${KERNEL_DIR}" apply --check "${PATCH}" 2>/dev/null; then
               if git -C "${KERNEL_DIR}" apply \
                 --ignore-whitespace --ignore-space-change "${PATCH}" 2>/dev/null; then
@@ -452,7 +443,7 @@ jobs:
           make ARCH=x86_64 O="${KERNEL_OUT}" olddefconfig
           echo "=== 关键配置验证 ==="
           for CFG in CONFIG_HID_IPTSD CONFIG_SURFACE_AGGREGATOR \
-            CONFIG_IWLWIFI CONFIG_BLK_DEV_NVME; do
+                     CONFIG_IWLWIFI CONFIG_BLK_DEV_NVME; do
             VAL=$(grep "^${CFG}=" "${KERNEL_OUT}/.config" 2>/dev/null || echo "未设置")
             echo "  ${CFG} = ${VAL}"
           done
@@ -514,7 +505,7 @@ jobs:
           cd "${{ env.ANDROID_SRC_DIR }}"
           source build/envsetup.sh
           lunch android_x86_64-${{ env.BUILD_TYPE }}
-          echo "TARGET_PRODUCT : ${TARGET_PRODUCT}"
+          echo "TARGET_PRODUCT       : ${TARGET_PRODUCT}"
           echo "TARGET_BUILD_VARIANT : ${TARGET_BUILD_VARIANT}"
           df -h .
           make -j${{ env.JOBS }} iso_img \
@@ -564,13 +555,14 @@ jobs:
         if: always()
         run: ccache --show-stats
 
-  # ============================================================================
+# ============================================================================
   release:
     name: "发布 GitHub Release"
     runs-on: ubuntu-latest
     needs: [preflight, build]
     if: >-
-      github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && needs.build.result == 'success')
+      github.ref_type == 'tag' ||
+      (github.event_name == 'workflow_dispatch' && needs.build.result == 'success')
     permissions:
       contents: write
     steps:
@@ -621,9 +613,9 @@ jobs:
             echo "### 安装方法"
             echo "1. 下载 \`${ISO}.iso\`"
             echo "2. 写入 U 盘:"
-            echo '   ```bash'
-            echo "   sudo dd if=${ISO}.iso of=/dev/sdX bs=4M status=progress"
-            echo '   ```'
+            echo ' ```bash'
+            echo "    sudo dd if=${ISO}.iso of=/dev/sdX bs=4M status=progress"
+            echo ' ```'
             echo "3. 从 U 盘启动，选择 Install 或 Live CD 模式"
             echo ""
             echo "### SHA256"
@@ -655,7 +647,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ============================================================================
+# ============================================================================
   notify:
     name: "构建摘要"
     runs-on: ubuntu-latest
