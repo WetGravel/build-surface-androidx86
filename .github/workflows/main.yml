@@ -120,7 +120,7 @@ jobs:
   # ============================================================================
   build:
     name: "编译 Android-x86 + Surface 驱动"
-    runs-on: ubuntu-latest          # 已修复：Ubuntu 20.04 已退役，使用 24.04
+    runs-on: ubuntu-latest
     needs: preflight
     timeout-minutes: 480
 
@@ -165,11 +165,11 @@ jobs:
             mtools parted genisoimage isolinux \
             ccache build-essential
 
-          # ── 处理 Ubuntu 24.04 中已移除的旧库 ──
-          # 1. ncurses 开发包（提供头文件等）
+          # ── Ubuntu 24.04 中已移除的旧库 ──
+          # 1. ncurses 开发包
           sudo apt-get install -y libncurses-dev
 
-          # 2. 手动安装 libncurses5 / libncursesw5 运行时库（来自 20.04 官方存档）
+          # 2. 手动安装 libncurses5 / libncursesw5 运行时（来自 20.04 存档）
           echo ">>> 安装 libncurses5 / libncursesw5 兼容库"
           ARCHIVE_BASE="http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses"
           wget -q "${ARCHIVE_BASE}/libtinfo5_6.2-0ubuntu2_amd64.deb"  -O /tmp/tinfo5.deb
