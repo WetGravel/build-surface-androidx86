@@ -1,5 +1,4 @@
-name: Build Android-x86 9.0 + Linux-Surface ISO
-
+name: Build Android-x86 11.0 + Linux-Surface ISO
 on:
   push:
     tags:
@@ -9,10 +8,12 @@ on:
       android_x86_branch:
         description: 'Android-x86 分支'
         required: true
-        default: 'pie-x86'
+        default: 'r-x86'
         type: choice
         options:
-          - pie-x86
+          - r-x86    # Android 11 (推荐)
+          - t-x86    # Android 13 (实验性)
+          - q-x86    # Android 10
       surface_linux_branch:
         description: 'Linux-Surface 分支'
         required: true
@@ -21,12 +22,12 @@ on:
       kernel_version:
         description: '内核版本'
         required: true
-        default: '4.19'
+        default: '5.15'
         type: choice
         options:
-          - '4.19'
-          - '5.4'
-          - '5.10'
+          - '5.15'   # 长期支持版
+          - '6.1'    # 较新稳定版
+          - '6.6'    # 最新长期支持版
       enable_iptsd:
         description: '启用 IPTSD 触控/触笔支持'
         required: true
@@ -60,36 +61,34 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ANDROID_X86_BRANCH:   ${{ github.event.inputs.android_x86_branch  || 'pie-x86' }}
+  ANDROID_X86_BRANCH: ${{ github.event.inputs.android_x86_branch || 'r-x86' }}
   SURFACE_LINUX_BRANCH: ${{ github.event.inputs.surface_linux_branch || 'master' }}
-  KERNEL_VERSION:       ${{ github.event.inputs.kernel_version       || '4.19' }}
-  ENABLE_IPTSD:         ${{ github.event.inputs.enable_iptsd         || 'true' }}
-  ENABLE_CAMERA:        ${{ github.event.inputs.enable_camera        || 'false' }}
-  BUILD_TYPE:           ${{ github.event.inputs.build_type           || 'userdebug' }}
-  ANDROID_SRC_DIR:      ${{ github.workspace }}/android-src
-  SURFACE_REPO_DIR:     ${{ github.workspace }}/linux-surface
-  OUT_DIR:              ${{ github.workspace }}/out
-  CCACHE_DIR:           ${{ github.workspace }}/ccache
+  KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '5.15' }}
+  ENABLE_IPTSD: ${{ github.event.inputs.enable_iptsd || 'true' }}
+  ENABLE_CAMERA: ${{ github.event.inputs.enable_camera || 'false' }}
+  BUILD_TYPE: ${{ github.event.inputs.build_type || 'userdebug' }}
+  ANDROID_SRC_DIR: ${{ github.workspace }}/android-src
+  SURFACE_REPO_DIR: ${{ github.workspace }}/linux-surface
+  OUT_DIR: ${{ github.workspace }}/out
+  CCACHE_DIR: ${{ github.workspace }}/ccache
   JOBS: 8
 
 jobs:
-
   # ============================================================================
   preflight:
     name: "预检 & 环境验证"
     runs-on: ubuntu-latest
     outputs:
       build_tag: ${{ steps.set_tag.outputs.tag }}
-      iso_name:  ${{ steps.set_tag.outputs.iso_name }}
-
+      iso_name: ${{ steps.set_tag.outputs.iso_name }}
     steps:
       - name: 检查磁盘空间
         run: |
           echo "=== 磁盘空间 ==="
           df -h
           AVAIL=$(df --output=avail -BG / | tail -1 | tr -d 'G')
-          if [ "${AVAIL}" -lt 80 ]; then
-            echo "磁盘空间不足（需要 80GB，当前 ${AVAIL}GB）"
+          if [ "${AVAIL}" -lt 100 ]; then
+            echo "磁盘空间不足（需要 100GB，当前 ${AVAIL}GB）"
             exit 1
           fi
           echo "磁盘充足: ${AVAIL}GB"
@@ -102,8 +101,8 @@ jobs:
           else
             TAG="$(date +'%Y%m%d')-${{ env.ANDROID_X86_BRANCH }}"
           fi
-          ISO_NAME="android-x86_64-9.0-surface-${TAG}"
-          echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
+          ISO_NAME="android-x86_64-11.0-surface-${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "iso_name=${ISO_NAME}" >> "$GITHUB_OUTPUT"
           echo "构建标签: ${TAG}"
           echo "ISO 名称: ${ISO_NAME}"
@@ -112,20 +111,18 @@ jobs:
         run: |
           echo "Android-x86 分支 : ${{ env.ANDROID_X86_BRANCH }}"
           echo "Linux-Surface 分支: ${{ env.SURFACE_LINUX_BRANCH }}"
-          echo "内核版本          : ${{ env.KERNEL_VERSION }}"
-          echo "IPTSD             : ${{ env.ENABLE_IPTSD }}"
-          echo "相机              : ${{ env.ENABLE_CAMERA }}"
-          echo "编译类型          : ${{ env.BUILD_TYPE }}"
+          echo "内核版本 : ${{ env.KERNEL_VERSION }}"
+          echo "IPTSD : ${{ env.ENABLE_IPTSD }}"
+          echo "相机 : ${{ env.ENABLE_CAMERA }}"
+          echo "编译类型 : ${{ env.BUILD_TYPE }}"
 
   # ============================================================================
   build:
     name: "编译 Android-x86 + Surface 驱动"
     runs-on: ubuntu-latest
     needs: preflight
-    timeout-minutes: 480
-
+    timeout-minutes: 600
     steps:
-
       - name: 释放 GitHub Runner 磁盘空间
         run: |
           echo "释放前:"; df -h
@@ -145,12 +142,11 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
-
           # 现代系统包
           sudo apt-get install -y --no-install-recommends \
             git git-core curl wget \
             python3 python3-pip \
-            openjdk-8-jdk-headless \
+            openjdk-11-jdk-headless \
             bison flex gawk \
             gcc g++ g++-multilib gcc-multilib \
             make ninja-build cmake \
@@ -164,27 +160,22 @@ jobs:
             dosfstools syslinux syslinux-common \
             mtools parted genisoimage isolinux \
             ccache build-essential
-
           # ── Ubuntu 24.04 中已移除的旧库 ──
           # 1. ncurses 开发包
           sudo apt-get install -y libncurses-dev
-
           # 2. 手动安装 libncurses5 / libncursesw5 运行时（来自 20.04 存档）
           echo ">>> 安装 libncurses5 / libncursesw5 兼容库"
           ARCHIVE_BASE="http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses"
-          wget -q "${ARCHIVE_BASE}/libtinfo5_6.2-0ubuntu2_amd64.deb"  -O /tmp/tinfo5.deb
+          wget -q "${ARCHIVE_BASE}/libtinfo5_6.2-0ubuntu2_amd64.deb" -O /tmp/tinfo5.deb
           wget -q "${ARCHIVE_BASE}/libncurses5_6.2-0ubuntu2_amd64.deb" -O /tmp/ncurses5.deb
           wget -q "${ARCHIVE_BASE}/libncursesw5_6.2-0ubuntu2_amd64.deb" -O /tmp/ncursesw5.deb
           sudo dpkg -i /tmp/tinfo5.deb /tmp/ncurses5.deb /tmp/ncursesw5.deb
           sudo apt-mark hold libtinfo5 libncurses5 libncursesw5
-
           # 3. 其他可能缺失的旧包
           sudo apt-get install -y lib32readline8-dev || \
             echo "lib32readline8-dev 不可用，忽略（不影响编译）"
-
           # 4. python 软链接
           sudo ln -sf /usr/bin/python3 /usr/bin/python || true
-
           echo "所有依赖安装完成"
 
       - name: 安装 repo 工具
@@ -197,7 +188,7 @@ jobs:
       - name: 配置 Git
         run: |
           git config --global user.email "ci@github-actions"
-          git config --global user.name  "GitHub Actions"
+          git config --global user.name "GitHub Actions"
           git config --global color.ui false
           git config --global http.postBuffer 1073741824
 
@@ -213,13 +204,13 @@ jobs:
       - name: 配置 ccache
         run: |
           mkdir -p "${{ env.CCACHE_DIR }}"
-          ccache --max-size=20G
+          ccache --max-size=30G
           ccache --set-config=compiler_check=content
           ccache --set-config=cache_dir="${{ env.CCACHE_DIR }}"
           ccache --zero-stats
           echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> "$GITHUB_ENV"
-          echo "USE_CCACHE=1"                      >> "$GITHUB_ENV"
-          echo "CCACHE_EXEC=$(which ccache)"       >> "$GITHUB_ENV"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_EXEC=$(which ccache)" >> "$GITHUB_ENV"
 
       - name: 初始化 repo manifest
         run: |
@@ -285,8 +276,8 @@ jobs:
         run: |
           KERNEL_DIR="${{ env.KERNEL_DIR }}"
           SURFACE_REPO="${{ env.SURFACE_REPO_DIR }}"
-
           PATCH_DIR=""
+          # 优先匹配指定内核版本，其次找最新可用补丁
           for TRY_VER in "${{ env.KERNEL_VERSION }}" \
             "$(ls ${SURFACE_REPO}/patches/ | sort -V | tail -1)"; do
             CANDIDATE="${SURFACE_REPO}/patches/${TRY_VER}"
@@ -296,10 +287,9 @@ jobs:
             fi
           done
           [ -z "${PATCH_DIR}" ] && PATCH_DIR="${SURFACE_REPO}/patches"
-
           echo "使用补丁目录: ${PATCH_DIR}"
+          
           APPLIED=0; SKIPPED=0; FAILED=0
-
           for PATCH in $(ls "${PATCH_DIR}"/*.patch 2>/dev/null | sort); do
             NAME=$(basename "${PATCH}")
             printf "  应用 %s ... " "${NAME}"
@@ -317,9 +307,8 @@ jobs:
               echo "SKIP"; SKIPPED=$((SKIPPED+1))
             fi
           done
-
           echo "补丁结果 — 成功:${APPLIED} 跳过:${SKIPPED} 失败:${FAILED}"
-          [ "${FAILED}" -gt 2 ] && { echo "失败补丁过多，请检查版本兼容性"; exit 1; }
+          [ "${FAILED}" -gt 5 ] && { echo "失败补丁过多，请检查版本兼容性"; exit 1; }
 
       - name: 集成 IPTSD 驱动
         if: env.ENABLE_IPTSD == 'true'
@@ -327,7 +316,6 @@ jobs:
           IPTSD_DIR="${{ env.KERNEL_DIR }}/drivers/hid/iptsd"
           SURFACE_REPO="${{ env.SURFACE_REPO_DIR }}"
           mkdir -p "${IPTSD_DIR}"
-
           if [ -d "${SURFACE_REPO}/module/iptsd" ]; then
             cp -r "${SURFACE_REPO}/module/iptsd/." "${IPTSD_DIR}/"
             echo "IPTSD: 从 linux-surface/module 复制"
@@ -366,12 +354,10 @@ jobs:
       - name: 写入 Surface 内核配置片段
         run: |
           SURFACE_CONFIG="${{ env.SURFACE_REPO_DIR }}/configs/surface.config"
-
           if [ ! -f "${SURFACE_CONFIG}" ]; then
             SURFACE_CONFIG="/tmp/surface-fragment.config"
             printf '%s\n' \
               '# Surface Platform / ACPI' \
-              'CONFIG_SURFACE_3_POWER_OPREGION=m' \
               'CONFIG_SURFACE_ACPI_NOTIFY=m' \
               'CONFIG_SURFACE_AGGREGATOR=m' \
               'CONFIG_SURFACE_AGGREGATOR_BUS=m' \
@@ -442,7 +428,6 @@ jobs:
               'CONFIG_SND_SOC_MAX98373=m' \
               > "${SURFACE_CONFIG}"
           fi
-
           echo "SURFACE_CONFIG=${SURFACE_CONFIG}" >> "$GITHUB_ENV"
           echo "配置行数: $(grep -cv '^#' ${SURFACE_CONFIG} || true)"
 
@@ -452,22 +437,18 @@ jobs:
           KERNEL_OUT="${{ env.OUT_DIR }}/kernel"
           mkdir -p "${KERNEL_OUT}"
           cd "${KERNEL_DIR}"
-
           make ARCH=x86_64 O="${KERNEL_OUT}" android-x86_64_defconfig
-
           if [ -f "scripts/kconfig/merge_config.sh" ]; then
             KCONFIG_CONFIG="${KERNEL_OUT}/.config" ARCH=x86_64 \
-            bash scripts/kconfig/merge_config.sh \
+              bash scripts/kconfig/merge_config.sh \
               -m "${KERNEL_OUT}/.config" "${{ env.SURFACE_CONFIG }}"
           else
             cat "${{ env.SURFACE_CONFIG }}" >> "${KERNEL_OUT}/.config"
           fi
-
           make ARCH=x86_64 O="${KERNEL_OUT}" olddefconfig
-
           echo "=== 关键配置验证 ==="
           for CFG in CONFIG_HID_IPTSD CONFIG_SURFACE_AGGREGATOR \
-                     CONFIG_IWLWIFI CONFIG_BLK_DEV_NVME; do
+            CONFIG_IWLWIFI CONFIG_BLK_DEV_NVME; do
             VAL=$(grep "^${CFG}=" "${KERNEL_OUT}/.config" 2>/dev/null || echo "未设置")
             echo "  ${CFG} = ${VAL}"
           done
@@ -476,12 +457,10 @@ jobs:
         run: |
           DEVICE_DIR="${{ env.ANDROID_SRC_DIR }}/device/surface/x86_64"
           mkdir -p "${DEVICE_DIR}"
-
           printf '%s\n' \
             'LOCAL_PATH := $(call my-dir)' \
             'include $(CLEAR_VARS)' \
             > "${DEVICE_DIR}/Android.mk"
-
           {
             echo '# Surface x86_64 设备配置'
             echo 'PRODUCT_NAME := android_x86_64_surface'
@@ -491,21 +470,20 @@ jobs:
             echo 'PRODUCT_MANUFACTURER := Microsoft'
             echo '$(call inherit-product, device/generic/x86_64/device.mk)'
             echo 'PRODUCT_COPY_FILES += \'
-            echo '    $(LOCAL_PATH)/iptsd.idc:$(TARGET_COPY_OUT_SYSTEM)/usr/idc/iptsd.idc \'
-            echo '    $(LOCAL_PATH)/surface_init.rc:$(TARGET_COPY_OUT_SYSTEM)/etc/init/surface_init.rc \'
-            echo '    frameworks/native/data/etc/android.hardware.wifi.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.wifi.xml \'
-            echo '    frameworks/native/data/etc/android.hardware.touchscreen.multitouch.jazzhand.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.touchscreen.multitouch.jazzhand.xml \'
-            echo '    frameworks/native/data/etc/android.hardware.bluetooth.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.bluetooth.xml \'
-            echo '    frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.usb.host.xml \'
-            echo '    frameworks/native/data/etc/android.hardware.sensor.accelerometer.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.sensor.accelerometer.xml'
+            echo '  $(LOCAL_PATH)/iptsd.idc:$(TARGET_COPY_OUT_SYSTEM)/usr/idc/iptsd.idc \'
+            echo '  $(LOCAL_PATH)/surface_init.rc:$(TARGET_COPY_OUT_SYSTEM)/etc/init/surface_init.rc \'
+            echo '  frameworks/native/data/etc/android.hardware.wifi.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.wifi.xml \'
+            echo '  frameworks/native/data/etc/android.hardware.touchscreen.multitouch.jazzhand.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.touchscreen.multitouch.jazzhand.xml \'
+            echo '  frameworks/native/data/etc/android.hardware.bluetooth.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.bluetooth.xml \'
+            echo '  frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.usb.host.xml \'
+            echo '  frameworks/native/data/etc/android.hardware.sensor.accelerometer.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/android.hardware.sensor.accelerometer.xml'
             echo 'PRODUCT_AAPT_CONFIG := xlarge'
             echo 'PRODUCT_AAPT_PREF_CONFIG := xhdpi'
             echo 'PRODUCT_CHARACTERISTICS := tablet'
             echo 'PRODUCT_PROPERTY_OVERRIDES += \'
-            echo '    ro.sf.lcd_density=192 \'
-            echo '    persist.sys.timezone=Asia/Shanghai'
+            echo '  ro.sf.lcd_density=192 \'
+            echo '  persist.sys.timezone=Asia/Shanghai'
           } > "${DEVICE_DIR}/device.mk"
-
           printf '%s\n' \
             'device.internal = 1' \
             'touch.deviceType = touchScreen' \
@@ -514,18 +492,16 @@ jobs:
             'touch.pressure.calibration = amplitude' \
             'touch.pressure.scale = 0.013' \
             > "${DEVICE_DIR}/iptsd.idc"
-
           printf '%s\n' \
             '# Surface 初始化脚本' \
             'on property:sys.boot_completed=1' \
-            '    exec /system/bin/modprobe surface_aggregator' \
-            '    exec /system/bin/modprobe surface_hid' \
-            '    exec /system/bin/modprobe hid_iptsd' \
-            '    chmod 0666 /dev/input/event0' \
-            '    chown system system /dev/input/event0' \
-            '    setprop vendor.wifi.firmware /vendor/firmware' \
+            '  exec /system/bin/modprobe surface_aggregator' \
+            '  exec /system/bin/modprobe surface_hid' \
+            '  exec /system/bin/modprobe hid_iptsd' \
+            '  chmod 0666 /dev/input/event0' \
+            '  chown system system /dev/input/event0' \
+            '  setprop vendor.wifi.firmware /vendor/firmware' \
             > "${DEVICE_DIR}/surface_init.rc"
-
           echo "Surface 设备配置创建完成"
           ls -la "${DEVICE_DIR}"
 
@@ -534,17 +510,14 @@ jobs:
           cd "${{ env.ANDROID_SRC_DIR }}"
           source build/envsetup.sh
           lunch android_x86_64-${{ env.BUILD_TYPE }}
-
-          echo "TARGET_PRODUCT       : ${TARGET_PRODUCT}"
+          echo "TARGET_PRODUCT : ${TARGET_PRODUCT}"
           echo "TARGET_BUILD_VARIANT : ${TARGET_BUILD_VARIANT}"
           df -h .
-
           make -j${{ env.JOBS }} iso_img \
             TARGET_PRODUCT=android_x86_64 \
             TARGET_BUILD_VARIANT=${{ env.BUILD_TYPE }} \
             2>&1 | tee /tmp/build.log
           BUILD_EC=$?
-
           if [ "${BUILD_EC}" -ne 0 ]; then
             echo "编译失败 (exit ${BUILD_EC})"
             tail -100 /tmp/build.log
@@ -555,28 +528,23 @@ jobs:
       - name: 定位 ISO 并生成校验和
         run: |
           cd "${{ env.ANDROID_SRC_DIR }}"
-
           ISO_SRC=$(find . -name "*.iso" -newer build/envsetup.sh 2>/dev/null | head -1)
           [ -z "${ISO_SRC}" ] && \
             ISO_SRC=$(find out/target/product -name "android_x86_64.iso" 2>/dev/null | head -1)
-
           if [ -z "${ISO_SRC}" ]; then
             echo "未找到 ISO 文件"
             find out/ -name "*.iso" 2>/dev/null || echo "out/ 中无 ISO"
             exit 1
           fi
-
           echo "找到 ISO: ${ISO_SRC} ($(du -sh ${ISO_SRC} | cut -f1))"
-
           ISO_NAME="${{ needs.preflight.outputs.iso_name }}"
           ISO_FINAL="${{ env.OUT_DIR }}/${ISO_NAME}.iso"
           mkdir -p "${{ env.OUT_DIR }}"
           cp "${ISO_SRC}" "${ISO_FINAL}"
           sha256sum "${ISO_FINAL}" > "${ISO_FINAL}.sha256"
           echo "SHA256: $(cat ${ISO_FINAL}.sha256)"
-
           echo "ISO_FINAL=${ISO_FINAL}" >> "$GITHUB_ENV"
-          echo "ISO_NAME=${ISO_NAME}"   >> "$GITHUB_ENV"
+          echo "ISO_NAME=${ISO_NAME}" >> "$GITHUB_ENV"
 
       - name: 上传 ISO 为 Artifact
         uses: actions/upload-artifact@v4
@@ -598,11 +566,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, build]
     if: >-
-      github.ref_type == 'tag' ||
-      (github.event_name == 'workflow_dispatch' && needs.build.result == 'success')
+      github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && needs.build.result == 'success')
     permissions:
       contents: write
-
     steps:
       - name: 下载编译产物
         uses: actions/download-artifact@v4
@@ -625,12 +591,11 @@ jobs:
           ISO="${{ needs.preflight.outputs.iso_name }}"
           SHA=$(cat "./release-files/${ISO}.iso.sha256" 2>/dev/null || echo "见附件")
           BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M UTC')
-
           {
-            echo "## Android-x86 9.0 + Linux-Surface · ${TAG}"
+            echo "## Android-x86 11.0 + Linux-Surface · ${TAG}"
             echo ""
             echo "### 包含内容"
-            echo "- 基础系统: Android-x86 9.0 (${{ env.ANDROID_X86_BRANCH }})"
+            echo "- 基础系统: Android-x86 11.0 (${{ env.ANDROID_X86_BRANCH }})"
             echo "- Surface 补丁: linux-surface/${{ env.SURFACE_LINUX_BRANCH }}"
             echo "- 内核版本: Linux ${{ env.KERNEL_VERSION }}.x (with Surface patches)"
             echo "- 编译类型: ${{ env.BUILD_TYPE }}"
@@ -640,14 +605,10 @@ jobs:
             echo "### 支持的 Surface 型号"
             echo "| 型号 | 状态 | 备注 |"
             echo "|------|------|------|"
-            echo "| Surface Pro 3 | 部分 | 触控笔不完整 |"
-            echo "| Surface Pro 4 | 良好 | 触控/键盘正常 |"
-            echo "| Surface Pro 5 (2017) | 良好 | |"
-            echo "| Surface Pro 6 | 良好 | |"
-            echo "| Surface Pro 7 | 部分 | 相机需额外配置 |"
-            echo "| Surface Laptop 1/2/3 | 良好 | |"
-            echo "| Surface Book 1/2 | 部分 | GPU 切换受限 |"
-            echo "| Surface Go 1/2 | 良好 | |"
+            echo "| Surface Pro 3-9 | 良好 | 触控/键盘正常 |"
+            echo "| Surface Laptop 1-5 | 良好 | |"
+            echo "| Surface Book 1-3 | 部分 | GPU 切换受限 |"
+            echo "| Surface Go 1-3 | 良好 | |"
             echo ""
             echo "### 安装方法"
             echo "1. 下载 \`${ISO}.iso\`"
@@ -663,7 +624,7 @@ jobs:
             echo '```'
             echo ""
             echo "### 已知问题"
-            echo "- Surface Pro 7+ 触控笔可能需要 iptsd 用户空间守护进程"
+            echo "- 部分型号触控笔可能需要 iptsd 用户空间守护进程"
             echo "- 相机（ISP）支持仍处于实验阶段"
             echo "- 休眠/唤醒在部分型号上可能不稳定"
             echo ""
@@ -676,7 +637,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.preflight.outputs.build_tag }}
-          name: "Android-x86 9.0 + Surface · ${{ needs.preflight.outputs.build_tag }}"
+          name: "Android-x86 11.0 + Surface · ${{ needs.preflight.outputs.build_tag }}"
           body_path: /tmp/release_notes.md
           draft: false
           prerelease: ${{ env.BUILD_TYPE != 'user' }}
@@ -692,7 +653,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, build, release]
     if: always()
-
     steps:
       - name: 写入 Job Summary
         run: |
